@@ -89,6 +89,13 @@ class VideoAnnotator(QMainWindow):
         # 安装事件过滤器以捕获键盘事件
         self.installEventFilter(self)
     
+        # 新增一个标记，用来区分“是否需要跳转（随机访问视频帧）”
+        # 当用户拖动进度条或快进/后退时，将其置为 True
+        # 在 update_frame() 中检测到 True 时才执行 cap.set(...)
+        self.need_jump = True
+        # 新增一个标记，用来区分“是否正在拖动进度条”
+        self.is_dragging = False
+
     def init_ui(self):
         # 主布局
         main_widget = QWidget()
@@ -315,9 +322,12 @@ class VideoAnnotator(QMainWindow):
         #     self.toggle_play()
         #     self._was_playing = True
 
-        # 将拖拽位置映射到帧数
+        # 将当前拖拽位置映射到帧数，保存为 self.current_frame
         self.current_frame = value
-        self.update_frame()
+        # 如果想要“实时”预览，则需要标记“需要跳转”并立刻刷新
+        if self.is_dragging:
+            self.need_jump = True
+            self.update_frame()
 
     def create_menu(self):
         """创建菜单栏"""
@@ -520,8 +530,16 @@ class VideoAnnotator(QMainWindow):
                 self.play_btn.setText("播放")
                 self.timer.stop()
             
-            # 设置当前帧
-            self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame)
+            if self.need_jump:
+                # 只有在需要跳转时才调用 cap.set
+                self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame)
+                self.need_jump = False
+            else:
+                # 如果不需要跳转，就说明仍在顺序播放逻辑里，
+                # 直接用 read() 读取下一帧即可（前面已经读过上一帧了）。
+                pass
+            
+            # 这里直接顺序读取即可
             ret, frame = self.cap.read()
             
             if not ret:
@@ -566,7 +584,7 @@ class VideoAnnotator(QMainWindow):
             self.slider.blockSignals(False)
             
             # 如果处于播放状态，播放下一帧
-            if self.playing:
+            if self.playing and not self.is_dragging:
                 self.current_frame += 1
                 
                 # 如果到达视频结尾，停止播放
@@ -606,7 +624,7 @@ class VideoAnnotator(QMainWindow):
         
         if self.playing:
             self.play_btn.setText("暂停")
-            self.timer.start(int(1000 / (self.fps * 2)))  # 帧率的两倍来确保流畅播放
+            self.timer.start(int(1000 / (self.fps)))  # 帧率的两倍来确保流畅播放
         else:
             self.play_btn.setText("播放")
             self.timer.stop()
@@ -618,10 +636,14 @@ class VideoAnnotator(QMainWindow):
             self._was_playing = True
         else:
             self._was_playing = False
+
+        self.is_dragging = True
     
     def slider_released(self):
         """释放滑块后跳转到相应位置"""
         self.current_frame = self.slider.value()
+        self.is_dragging = False
+        self.need_jump = True
         self.update_frame()
         
         # 如果之前是播放状态，则恢复播放
@@ -638,6 +660,7 @@ class VideoAnnotator(QMainWindow):
         target_frame = self.current_frame + int(seconds * self.fps)
         target_frame = max(0, min(target_frame, self.frame_count - 1))
         self.current_frame = target_frame
+        self.need_jump = True
         self.update_frame()
     
     def seek_frames(self, frames):
@@ -648,6 +671,7 @@ class VideoAnnotator(QMainWindow):
         target_frame = self.current_frame + frames
         target_frame = max(0, min(target_frame, self.frame_count - 1))
         self.current_frame = target_frame
+        self.need_jump = True
         self.update_frame()
     
     def jump_to_annotation(self, item):
@@ -664,6 +688,7 @@ class VideoAnnotator(QMainWindow):
             target_frame = anno["start_frame"]
         
         self.current_frame = target_frame
+        self.need_jump = True
         self.update_frame()
     
     def add_annotation_with_template(self, template_index):
