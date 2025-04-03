@@ -69,6 +69,8 @@ class VideoAnnotator(QMainWindow):
         self._was_playing = False
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_frame)
+        self.video_width = 0
+        self.video_height = 0
         
         # 标注数据
         self.annotations = []
@@ -89,11 +91,11 @@ class VideoAnnotator(QMainWindow):
         # 安装事件过滤器以捕获键盘事件
         self.installEventFilter(self)
     
-        # 新增一个标记，用来区分“是否需要跳转（随机访问视频帧）”
+        # 新增一个标记，用来区分"是否需要跳转（随机访问视频帧）"
         # 当用户拖动进度条或快进/后退时，将其置为 True
         # 在 update_frame() 中检测到 True 时才执行 cap.set(...)
         self.need_jump = True
-        # 新增一个标记，用来区分“是否正在拖动进度条”
+        # 新增一个标记，用来区分"是否正在拖动进度条"
         self.is_dragging = False
 
     def init_ui(self):
@@ -324,7 +326,7 @@ class VideoAnnotator(QMainWindow):
 
         # 将当前拖拽位置映射到帧数，保存为 self.current_frame
         self.current_frame = value
-        # 如果想要“实时”预览，则需要标记“需要跳转”并立刻刷新
+        # 如果想要"实时"预览，则需要标记"需要跳转"并立刻刷新
         if self.is_dragging:
             self.need_jump = True
             self.update_frame()
@@ -484,6 +486,8 @@ class VideoAnnotator(QMainWindow):
             # 获取视频属性
             self.frame_count = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
             self.fps = self.cap.get(cv2.CAP_PROP_FPS)
+            self.video_width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            self.video_height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             
             if self.frame_count <= 0 or self.fps <= 0:
                 raise ValueError("检测到无效的视频属性")
@@ -510,7 +514,10 @@ class VideoAnnotator(QMainWindow):
             self.toggle_controls(True)
             
             # 更新状态
-            self.status_label.setText(f"已加载: {os.path.basename(file_path)}")
+            self.status_label.setText(f"已加载: {os.path.basename(file_path)} ({self.video_width}x{self.video_height})")
+            
+            # 根据视频长宽比调整界面布局
+            self.adjust_layout_for_video()
             
         except Exception as e:
             QMessageBox.critical(self, "错误", f"打开视频失败: {str(e)}")
@@ -990,6 +997,59 @@ class VideoAnnotator(QMainWindow):
         if self.cap is not None:
             self.cap.release()
         event.accept()
+
+    def adjust_layout_for_video(self):
+        """根据视频长宽比调整界面布局"""
+        if self.video_width <= 0 or self.video_height <= 0:
+            return
+        
+        # 计算视频长宽比
+        aspect_ratio = self.video_width / self.video_height
+        
+        # 获取当前窗口大小
+        window_width = self.width()
+        window_height = self.height()
+        
+        # 根据视频长宽比和当前窗口大小计算合适的视频显示区域大小
+        video_area_height = int(window_height * 0.6)  # 视频区域占窗口高度的60%
+        video_area_width = int(video_area_height * aspect_ratio)
+        
+        # 如果计算出的宽度超过窗口宽度，则根据宽度重新调整
+        if video_area_width > window_width * 0.9:  # 留出10%的边距
+            video_area_width = int(window_width * 0.9)
+            video_area_height = int(video_area_width / aspect_ratio)
+        
+        # 设置视频标签的最小大小以适应视频比例
+        self.video_label.setMinimumSize(video_area_width, video_area_height)
+        
+        # 调整窗口大小以更好地适应视频
+        new_window_width = max(window_width, video_area_width + 40)  # 添加一些边距
+        new_window_height = max(window_height, video_area_height + 320)  # 为控制和标注区域留出空间
+        
+        # 调整窗口大小，但不要超过屏幕大小的80%
+        screen_rect = QApplication.desktop().screenGeometry()
+        max_width = int(screen_rect.width() * 0.8)
+        max_height = int(screen_rect.height() * 0.8)
+        
+        new_window_width = min(new_window_width, max_width)
+        new_window_height = min(new_window_height, max_height)
+        
+        # 调整窗口大小
+        self.resize(new_window_width, new_window_height)
+        
+        # 强制更新布局
+        self.centralWidget().layout().activate()
+        
+        # 更新显示的第一帧
+        self.update_frame()
+
+    def resizeEvent(self, event):
+        """窗口大小调整事件，用于调整视频显示"""
+        super().resizeEvent(event)
+        
+        # 如果已加载视频，在窗口大小改变时更新帧显示
+        if self.cap is not None:
+            self.update_frame()
 
 def main():
     app = QApplication(sys.argv)
