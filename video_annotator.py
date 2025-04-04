@@ -5,6 +5,7 @@ import csv
 import os
 import warnings
 from datetime import timedelta
+from collections import OrderedDict
 
 import numpy as np
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
@@ -71,6 +72,10 @@ class VideoAnnotator(QMainWindow):
         self.timer.timeout.connect(self.update_frame)
         self.video_width = 0
         self.video_height = 0
+        
+        self.cache_enabled = True
+        self.cache_size = 200  # 默认缓存200帧
+        self.frame_cache = OrderedDict()  # 使用OrderedDict实现LRU缓存
         
         # 标注数据
         self.annotations = []
@@ -452,6 +457,22 @@ class VideoAnnotator(QMainWindow):
         self.delete_annotation_btn.setEnabled(enabled)
         self.clear_annotations_btn.setEnabled(enabled)
         self.save_annotation_btn.setEnabled(enabled)
+        
+    def configure_cache(self, enabled=True, size=200):
+        """配置帧缓存设置
+        
+        Args:
+            enabled (bool): 是否启用缓存
+            size (int): 缓存的最大帧数
+        """
+        self.cache_enabled = enabled
+        self.cache_size = size
+        
+        if not enabled:
+            self.frame_cache.clear()
+        elif len(self.frame_cache) > size:
+            while len(self.frame_cache) > size:
+                self.frame_cache.popitem(last=False)
     
     def setup_shortcuts(self):
         """设置快捷键
@@ -476,6 +497,8 @@ class VideoAnnotator(QMainWindow):
         if self.cap is not None:
             self.cap.release()
             self.cap = None
+        
+        self.frame_cache.clear()
         
         try:
             self.cap = cv2.VideoCapture(file_path)
@@ -537,33 +560,39 @@ class VideoAnnotator(QMainWindow):
                 self.play_btn.setText("播放")
                 self.timer.stop()
             
-            if self.need_jump:
-                # 只有在需要跳转时才调用 cap.set
-                self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame)
-                self.need_jump = False
+            rgb_frame = None
+            if self.cache_enabled and self.current_frame in self.frame_cache:
+                rgb_frame = self.frame_cache[self.current_frame]
+                self.frame_cache.pop(self.current_frame)
+                self.frame_cache[self.current_frame] = rgb_frame
             else:
-                # 如果不需要跳转，就说明仍在顺序播放逻辑里，
-                # 直接用 read() 读取下一帧即可（前面已经读过上一帧了）。
-                pass
-            
-            # 这里直接顺序读取即可
-            ret, frame = self.cap.read()
-            
-            if not ret:
-                # 读取失败，可能是到达了视频末尾
-                self.timer.stop()
-                self.playing = False
-                self.play_btn.setText("播放")
-                # 设置为最后一帧
-                self.current_frame = self.frame_count - 1
-                self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame)
+                if self.need_jump:
+                    # 只有在需要跳转时才调用 cap.set
+                    self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame)
+                    self.need_jump = False
+                
                 ret, frame = self.cap.read()
+                
                 if not ret:
-                    # 如果仍然无法读取，说明视频文件可能有问题
-                    return
-            
-            # 转换颜色空间
-            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    # 读取失败，可能是到达了视频末尾
+                    self.timer.stop()
+                    self.playing = False
+                    self.play_btn.setText("播放")
+                    # 设置为最后一帧
+                    self.current_frame = self.frame_count - 1
+                    self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame)
+                    ret, frame = self.cap.read()
+                    if not ret:
+                        # 如果仍然无法读取，说明视频文件可能有问题
+                        return
+                
+                # 转换颜色空间
+                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                
+                if self.cache_enabled:
+                    if len(self.frame_cache) >= self.cache_size:
+                        self.frame_cache.popitem(last=False)  # 移除OrderedDict中的第一项（最旧的）
+                    self.frame_cache[self.current_frame] = rgb_frame.copy()
             
             # 转换为QImage
             h, w, ch = rgb_frame.shape
@@ -597,6 +626,16 @@ class VideoAnnotator(QMainWindow):
                 # 如果到达视频结尾，停止播放
                 if self.current_frame >= self.frame_count:
                     self.toggle_play()
+                elif self.cache_enabled and self.current_frame + 1 < self.frame_count and self.current_frame + 1 not in self.frame_cache:
+                    current_pos = self.current_frame
+                    self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame + 1)
+                    ret, next_frame = self.cap.read()
+                    if ret:
+                        next_rgb_frame = cv2.cvtColor(next_frame, cv2.COLOR_BGR2RGB)
+                        if len(self.frame_cache) >= self.cache_size:
+                            self.frame_cache.popitem(last=False)
+                        self.frame_cache[self.current_frame + 1] = next_rgb_frame.copy()
+                    self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame)
             
         except Exception as e:
             self.timer.stop()
