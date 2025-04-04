@@ -237,7 +237,7 @@ class VideoAnnotator(QMainWindow):
         annotation_control_layout.addLayout(template_layout)
         
         # 添加标注按钮
-        self.add_annotation_btn = QPushButton("添加标注 (Ctrl+1/2)")
+        self.add_annotation_btn = QPushButton("添加当前帧标注 (Ctrl+1/2)")
         self.add_annotation_btn.clicked.connect(self.add_annotation)
         annotation_control_layout.addWidget(self.add_annotation_btn)
         
