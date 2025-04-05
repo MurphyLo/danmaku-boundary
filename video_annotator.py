@@ -5,6 +5,7 @@ import csv
 import os
 import warnings
 from datetime import timedelta
+import time
 
 import numpy as np
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
@@ -97,6 +98,10 @@ class VideoAnnotator(QMainWindow):
         self.need_jump = True
         # 新增一个标记，用来区分"是否正在拖动进度条"
         self.is_dragging = False
+        
+        # 帧更新节流控制变量
+        self.last_update_time = 0  # 上次更新帧的时间
+        self.throttle_interval = 80  # 节流间隔（毫秒）
 
     def init_ui(self):
         # 主布局
@@ -329,7 +334,15 @@ class VideoAnnotator(QMainWindow):
         # 如果想要"实时"预览，则需要标记"需要跳转"并立刻刷新
         if self.is_dragging:
             self.need_jump = True
-            self.update_frame()
+            
+            # 添加节流控制
+            current_time = time.time() * 1000  # 转换为毫秒
+            time_elapsed = current_time - self.last_update_time
+            
+            # 节流控制：只有当经过了足够的时间间隔或者是拖动开始/结束时才更新帧
+            if time_elapsed >= self.throttle_interval:
+                self.update_frame()
+                self.last_update_time = current_time
 
     def create_menu(self):
         """创建菜单栏"""
@@ -645,6 +658,8 @@ class VideoAnnotator(QMainWindow):
             self._was_playing = False
 
         self.is_dragging = True
+        # 重置节流时间，确保拖动开始时立即显示第一帧
+        self.last_update_time = 0
     
     def slider_released(self):
         """释放滑块后跳转到相应位置"""
@@ -652,6 +667,8 @@ class VideoAnnotator(QMainWindow):
         self.is_dragging = False
         self.need_jump = True
         self.update_frame()
+        # 重置上次更新时间
+        self.last_update_time = time.time() * 1000
         
         # 如果之前是播放状态，则恢复播放
         if self._was_playing:
