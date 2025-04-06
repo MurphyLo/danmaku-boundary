@@ -27,7 +27,7 @@ class VideoPlayer:
         
         # 快速预览模式属性
         self.preview_mode = False
-        self.preview_speed = 60  # 20倍速
+        self.preview_speed = 150  # 20倍速
         self.just_paused_at_annotation = False  # 新增：标记是否刚在标注点暂停
         
         # UI 元素引用

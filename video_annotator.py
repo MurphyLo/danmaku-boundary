@@ -5,8 +5,8 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                             QPushButton, QLabel, QFileDialog, QShortcut, 
                             QListWidget, QComboBox, QMessageBox,
                             QGridLayout, QGroupBox, QSplitter, QFrame, QAction, QMenu)
-from PyQt5.QtGui import QFont
-from PyQt5.QtCore import Qt, QEvent
+from PyQt5.QtGui import QFont, QDragEnterEvent, QDropEvent
+from PyQt5.QtCore import Qt, QEvent, QMimeData
 
 # 导入自定义组件
 from ui_components import EllipsisLabel, ClickableSlider
@@ -46,6 +46,9 @@ class VideoAnnotator(QMainWindow):
         
         # 连接列表双击事件
         self.annotation_list.itemDoubleClicked.connect(self.annotation_manager.jump_to_annotation)
+        
+        # 开启接收拖放
+        self.setAcceptDrops(True)
     
     def setup_video_player(self):
         """设置视频播放器和UI元素的连接"""
@@ -476,3 +479,73 @@ class VideoAnnotator(QMainWindow):
         """关闭窗口时释放资源"""
         self.video_player.close()
         event.accept()
+
+    def dragEnterEvent(self, event: QDragEnterEvent):
+        """处理拖动进入事件"""
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+    
+    def dropEvent(self, event: QDropEvent):
+        """处理放下事件"""
+        urls = event.mimeData().urls()
+        if not urls:
+            return
+        
+        # 只处理第一个文件
+        file_path = urls[0].toLocalFile()
+        
+        if not os.path.exists(file_path):
+            QMessageBox.warning(self, "警告", f"文件不存在: {file_path}")
+            return
+        
+        # 获取文件扩展名
+        _, ext = os.path.splitext(file_path.lower())
+        
+        # 视频文件扩展名
+        video_exts = ['.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv']
+        # 标注文件扩展名
+        annotation_exts = ['.json', '.csv']
+        
+        if ext in video_exts:
+            # 打开视频文件
+            self.video_player.video_path = file_path
+            success = self.video_player.open_video(file_path)
+            
+            if success:
+                # 设置窗口标题
+                file_name = os.path.basename(self.video_player.video_path)
+                self.setWindowTitle(f"视频镜头边界标注工具 - {file_name}")
+                
+                # 重置标注管理器
+                self.annotation_manager.reset()
+                
+                # 启用控件
+                self.toggle_controls(True)
+                
+                # 更新状态
+                self.status_label.setText(
+                    f"已加载: {file_name} ({self.video_player.video_width}x{self.video_player.video_height})"
+                )
+                
+                # 调整界面布局
+                self.adjust_layout_for_video()
+                
+        elif ext in annotation_exts:
+            # 加载标注文件
+            try:
+                if ext == '.json':
+                    self.annotation_manager.load_from_json(file_path)
+                elif ext == '.csv':
+                    self.annotation_manager.load_from_csv(file_path)
+                
+                self.annotation_manager.sort_annotations()
+                self.annotation_manager.refresh_annotation_list()
+                
+                QMessageBox.information(self, "成功", f"已从 {file_path} 加载 {len(self.annotation_manager.annotations)} 个标注")
+                self.status_label.setText(f"已从 {os.path.basename(file_path)} 加载 {len(self.annotation_manager.annotations)} 个标注")
+            except Exception as e:
+                QMessageBox.critical(self, "错误", f"加载标注失败: {str(e)}")
+        else:
+            QMessageBox.warning(self, "警告", f"不支持的文件类型: {ext}")
+        
+        event.acceptProposedAction()
