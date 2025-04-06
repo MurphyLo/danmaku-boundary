@@ -25,11 +25,17 @@ class VideoPlayer:
         self.video_width = 0
         self.video_height = 0
         
+        # 快速预览模式属性
+        self.preview_mode = False
+        self.preview_speed = 60  # 20倍速
+        self.just_paused_at_annotation = False  # 新增：标记是否刚在标注点暂停
+        
         # UI 元素引用
         self.video_label = None
         self.time_label = None
         self.slider = None
         self.play_btn = None
+        self.preview_btn = None  # 新增预览模式按钮引用
         
         # 控制标志
         self.need_jump = True  # 是否需要跳转（随机访问视频帧）
@@ -39,18 +45,20 @@ class VideoPlayer:
         self.last_update_time = 0  # 上次更新帧的时间
         self.throttle_interval = 80  # 节流间隔（毫秒）
     
-    def setup_ui_connections(self, video_label, time_label, slider, play_btn):
+    def setup_ui_connections(self, video_label, time_label, slider, play_btn, preview_btn):
         """设置UI元素的引用和事件连接"""
         self.video_label = video_label
         self.time_label = time_label
         self.slider = slider
         self.play_btn = play_btn
+        self.preview_btn = preview_btn  # 新增预览按钮引用
         
         # 连接信号
         self.slider.sliderPressed.connect(self.slider_pressed)
         self.slider.sliderReleased.connect(self.slider_released)
         self.slider.valueChanged.connect(self.scrub_video)
         self.play_btn.clicked.connect(self.toggle_play)
+        self.preview_btn.clicked.connect(self.toggle_preview_mode)  # 新增预览按钮事件连接
     
     def open_video(self, file_path=None):
         """打开视频文件"""
@@ -111,6 +119,8 @@ class VideoPlayer:
                 self.playing = False
                 self.play_btn.setText("播放")
                 self.timer.stop()
+                if self.preview_mode:
+                    self.toggle_preview_mode()  # 关闭预览模式
             
             if self.need_jump:
                 # 只有在需要跳转时才调用 cap.set
@@ -125,6 +135,8 @@ class VideoPlayer:
                 self.timer.stop()
                 self.playing = False
                 self.play_btn.setText("播放")
+                if self.preview_mode:
+                    self.toggle_preview_mode()  # 关闭预览模式
                 # 设置为最后一帧
                 self.current_frame = self.frame_count - 1
                 self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame)
@@ -148,16 +160,51 @@ class VideoPlayer:
             
             # 如果处于播放状态，播放下一帧
             if self.playing and not self.is_dragging:
-                self.current_frame += 1
+                # 在预览模式下检查是否到达标注点
+                if self.preview_mode:
+                    next_frame = self.current_frame + self.preview_speed
+                    annotations = self.parent.annotation_manager.annotations
+                    
+                    # 检查是否有标注点在当前帧和下一帧之间
+                    found_annotation = False
+                    for anno in annotations:
+                        check_frame = None
+                        if anno["type"] == "direct_cut":
+                            check_frame = anno["frame"]  # 直接切换在切换点暂停
+                        else:  # gradual
+                            check_frame = anno["start_frame"]  # 渐变过渡在开始点暂停
+                        
+                        if check_frame is not None and self.current_frame < check_frame <= next_frame:
+                            self.current_frame = check_frame
+                            found_annotation = True
+                            if anno["type"] == "direct_cut":
+                                self.parent.status_label.setText(f"在直接切换点暂停 (帧 {check_frame})")
+                            else:
+                                self.parent.status_label.setText(f"在渐变过渡开始点暂停 (帧 {check_frame})")
+                            self.need_jump = True
+                            break
+                    
+                    if found_annotation:
+                        self.toggle_play()  # 暂停播放
+                    else:
+                        # 在预览模式下，每次更新跳过 preview_speed-1 帧
+                        self.current_frame = next_frame
+                        self.need_jump = True  # 需要跳转到新位置
+                else:
+                    self.current_frame += 1
                 
                 # 如果到达视频结尾，停止播放
                 if self.current_frame >= self.frame_count:
                     self.toggle_play()
+                    if self.preview_mode:
+                        self.toggle_preview_mode()  # 关闭预览模式
             
         except Exception as e:
             self.timer.stop()
             self.playing = False
             self.play_btn.setText("播放")
+            if self.preview_mode:
+                self.toggle_preview_mode()  # 关闭预览模式
             QMessageBox.critical(self.parent, "错误", f"显示帧时出错: {str(e)}")
     
     def display_frame(self, frame):
@@ -207,7 +254,15 @@ class VideoPlayer:
         
         if self.playing:
             self.play_btn.setText("暂停")
-            self.timer.start(int(1000 / (self.fps)))  # 帧率的两倍来确保流畅播放
+            # 计算播放间隔（毫秒）
+            if self.preview_mode:
+                # 在预览模式下，每次更新跳过 preview_speed-1 帧
+                interval = int(1000 / self.fps)  # 保持正常的更新频率
+            else:
+                interval = int(1000 / self.fps)
+            self.timer.start(interval)
+            # 重置标注点暂停标记
+            self.just_paused_at_annotation = False
         else:
             self.play_btn.setText("播放")
             self.timer.stop()
@@ -298,4 +353,30 @@ class VideoPlayer:
             self.cap.release()
             self.cap = None
             return True
-        return False 
+        return False
+    
+    def toggle_preview_mode(self):
+        """切换快速预览模式"""
+        if self.cap is None:
+            return
+        
+        # 记录当前的播放状态
+        original_state = self.playing
+        
+        # 如果正在播放，先停止
+        if self.playing:
+            self.toggle_play()
+        
+        # 切换预览模式
+        self.preview_mode = not self.preview_mode
+        self.just_paused_at_annotation = False  # 重置标记
+        
+        # 更新按钮文本
+        if self.preview_mode:
+            self.preview_btn.setText("关闭预览")
+        else:
+            self.preview_btn.setText("快速预览")
+        
+        # 如果之前是播放状态，恢复播放
+        if original_state:
+            self.toggle_play() 

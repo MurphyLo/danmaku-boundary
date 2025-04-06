@@ -32,7 +32,7 @@ pip install PyQt5 opencv-python numpy
 
 1. 运行程序：
    ```
-   python video_annotator.py
+   python main.py
    ```
 
 2. 打开视频文件（菜单"文件" -> "打开视频"或点击"打开视频"按钮）
@@ -101,6 +101,56 @@ CSV文件包含以下列：
 - start_frame: 开始帧
 - end_time: 结束时间（渐变过渡）
 - end_frame: 结束帧（渐变过渡）
+
+## 代码结构
+
+项目采用模块化设计，分为以下几个主要文件：
+
+### 核心文件
+
+- **main.py**: 应用程序入口，初始化Qt应用和主窗口
+- **video_annotator.py**: 主窗口类，整合其他组件并提供用户界面
+- **video_player.py**: 封装视频播放相关功能
+- **annotation_manager.py**: 处理标注的创建、管理和持久化
+- **ui_components.py**: 自定义UI控件
+
+### 模块关系
+
+```
+main.py
+  └── VideoAnnotator (video_annotator.py)
+        ├── VideoPlayer (video_player.py)
+        ├── AnnotationManager (annotation_manager.py)
+        └── UI Components (ui_components.py)
+```
+
+## 开发指南
+
+### 扩展功能
+
+1. **添加新的标注类型**:
+   - 在`annotation_manager.py`中扩展标注数据结构
+   - 更新UI以支持新的标注类型
+
+2. **自定义UI组件**:
+   - 在`ui_components.py`中添加新的控件类
+   - 在`video_annotator.py`中使用新组件
+
+3. **增加导出格式**:
+   - 在`annotation_manager.py`中添加新的导出方法
+
+### 编码规范
+
+- 使用PEP 8风格指南
+- 为所有类和方法编写文档字符串
+- 使用有意义的变量名和函数名
+
+### 测试
+
+建议为各个模块编写单元测试，尤其是以下方面：
+- 视频加载和处理
+- 标注数据的序列化和反序列化
+- UI交互
 
 ## 许可证
 

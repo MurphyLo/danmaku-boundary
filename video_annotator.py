@@ -53,7 +53,8 @@ class VideoAnnotator(QMainWindow):
             self.video_label,
             self.time_label,
             self.slider,
-            self.play_btn
+            self.play_btn,
+            self.preview_btn
         )
         
         # 连接前进后退按钮
@@ -127,6 +128,10 @@ class VideoAnnotator(QMainWindow):
         
         self.forward_btn = QPushButton("前进5秒")
         button_layout.addWidget(self.forward_btn)
+
+        # 快速预览按钮
+        self.preview_btn = QPushButton("快速预览")
+        button_layout.addWidget(self.preview_btn)
         
         control_layout.addLayout(button_layout)
         
@@ -356,6 +361,7 @@ class VideoAnnotator(QMainWindow):
         self.play_btn.setEnabled(enabled)
         self.back_btn.setEnabled(enabled)
         self.forward_btn.setEnabled(enabled)
+        self.preview_btn.setEnabled(enabled)
         self.slider.setEnabled(enabled)
         self.add_annotation_btn.setEnabled(enabled)
         self.delete_annotation_btn.setEnabled(enabled)
