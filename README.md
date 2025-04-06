@@ -1,8 +1,12 @@
-# B站慕课视频内课件切换边界标注工具
+# 慕课视频课件边界标注工具
 
 ## 简介
 
-这是一个用于标注B站慕课视频中PPT课件切换边界的工具，基于PyQt5和OpenCV开发。用于标注视频中的直接切换和渐变过渡PPT切换边界，并将标注结果保存为JSON或CSV格式。
+这是一个用于标注B站慕课视频中课件切换边界的工具，基于PyQt5和OpenCV。用于标注视频中的直接切换和渐变过渡PPT切换边界，并将标注结果保存为JSON或CSV格式。
+
+<div align="center">
+<img src="assets/demo.png" style="zoom:50%" />
+</div>
 
 ## 功能特点
 
@@ -176,7 +180,7 @@ MIT
 
 ## 工具脚本：场景边界到转场标注转换
 
-`scene_to_transition.py` 是一个用于将场景边界文件（_scenes.txt）转换为转场标注文件（_annotations.csv）的工具。
+`utils/scene_to_transition.py` 是一个用于将场景边界文件（_scenes.txt）转换为转场标注文件（_annotations.csv）的工具。
 
 ### 使用方法
 
