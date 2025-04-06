@@ -1,57 +1,19 @@
 import sys
-import cv2
-import json
-import csv
 import os
 import warnings
-from datetime import timedelta
-import time
-
-import numpy as np
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
-                            QPushButton, QLabel, QSlider, QFileDialog, QShortcut, 
-                            QListWidget, QListWidgetItem, QComboBox, QMessageBox,
-                            QGridLayout, QGroupBox, QSplitter, QFrame, QAction, QMenu, QStyle, QSizePolicy)
-from PyQt5.QtGui import QImage, QPixmap, QKeySequence, QFont, QFontMetrics, QPainter
-from PyQt5.QtCore import Qt, QTimer, QSize, QEvent
+                            QPushButton, QLabel, QFileDialog, QShortcut, 
+                            QListWidget, QComboBox, QMessageBox,
+                            QGridLayout, QGroupBox, QSplitter, QFrame, QAction, QMenu)
+from PyQt5.QtGui import QFont
+from PyQt5.QtCore import Qt, QEvent
+
+# 导入自定义组件
+from ui_components import EllipsisLabel, ClickableSlider
+from annotation_manager import AnnotationManager
+from video_player import VideoPlayer
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
-
-class EllipsisLabel(QLabel):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.full_text = ""
-
-        size_policy = self.sizePolicy()
-        size_policy.setHorizontalPolicy(QSizePolicy.Expanding)
-        size_policy.setVerticalPolicy(QSizePolicy.Preferred)
-        self.setSizePolicy(size_policy)
-
-    def setText(self, text):
-        self.full_text = text
-        self.setToolTip(text)
-        self.update()
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        metrics = QFontMetrics(self.font())
-        elided = metrics.elidedText(self.full_text, Qt.ElideRight, self.width())
-        painter.drawText(self.rect(), self.alignment(), elided)
-
-class ClickableSlider(QSlider):
-    def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            # 将点击位置转换为滑块对应的数值
-            new_value = QStyle.sliderValueFromPosition(
-                self.minimum(), 
-                self.maximum(), 
-                event.x(), 
-                self.width()
-            )
-            self.setValue(new_value)
-            # 触发与拖动完成相同的逻辑
-            self.sliderReleased.emit()
-        super().mousePressEvent(event)
 
 class VideoAnnotator(QMainWindow):
     def __init__(self):
@@ -60,25 +22,15 @@ class VideoAnnotator(QMainWindow):
         self.setWindowTitle("视频镜头边界标注工具")
         self.setGeometry(100, 100, 1280, 720)
         
-        # 视频属性
-        self.video_path = None
-        self.cap = None
-        self.frame_count = 0
-        self.fps = 0
-        self.current_frame = 0
-        self.playing = False
-        self._was_playing = False
-        self.timer = QTimer()
-        self.timer.timeout.connect(self.update_frame)
-        self.video_width = 0
-        self.video_height = 0
-        
-        # 标注数据
-        self.annotations = []
-        self.temp_annotation = None  # 用于存储临时标注（对于模板2）
+        # 创建标注管理器（在UI初始化前）
+        self.annotation_manager = AnnotationManager(self)
         
         # 设置UI
         self.init_ui()
+        
+        # 创建视频播放器
+        self.video_player = VideoPlayer(self)
+        self.setup_video_player()
         
         # 设置菜单
         self.create_menu()
@@ -91,17 +43,22 @@ class VideoAnnotator(QMainWindow):
         
         # 安装事件过滤器以捕获键盘事件
         self.installEventFilter(self)
-    
-        # 新增一个标记，用来区分"是否需要跳转（随机访问视频帧）"
-        # 当用户拖动进度条或快进/后退时，将其置为 True
-        # 在 update_frame() 中检测到 True 时才执行 cap.set(...)
-        self.need_jump = True
-        # 新增一个标记，用来区分"是否正在拖动进度条"
-        self.is_dragging = False
         
-        # 帧更新节流控制变量
-        self.last_update_time = 0  # 上次更新帧的时间
-        self.throttle_interval = 80  # 节流间隔（毫秒）
+        # 连接列表双击事件
+        self.annotation_list.itemDoubleClicked.connect(self.annotation_manager.jump_to_annotation)
+    
+    def setup_video_player(self):
+        """设置视频播放器和UI元素的连接"""
+        self.video_player.setup_ui_connections(
+            self.video_label,
+            self.time_label,
+            self.slider,
+            self.play_btn
+        )
+        
+        # 连接前进后退按钮
+        self.back_btn.clicked.connect(lambda: self.video_player.seek_relative(-5))
+        self.forward_btn.clicked.connect(lambda: self.video_player.seek_relative(5))
 
     def init_ui(self):
         # 主布局
@@ -144,14 +101,10 @@ class VideoAnnotator(QMainWindow):
         time_slider_layout.addWidget(self.time_label)
         
         # 进度条
-        # self.slider = QSlider(Qt.Horizontal)
         self.slider = ClickableSlider(Qt.Horizontal)
         self.slider.setMinimum(0)
         self.slider.setMaximum(1000)
         self.slider.setValue(0)
-        self.slider.sliderPressed.connect(self.slider_pressed)
-        self.slider.sliderReleased.connect(self.slider_released)
-        self.slider.valueChanged.connect(self.scrub_video)
         time_slider_layout.addWidget(self.slider)
         
         control_layout.addLayout(time_slider_layout)
@@ -166,16 +119,13 @@ class VideoAnnotator(QMainWindow):
         
         # 播放/暂停按钮
         self.play_btn = QPushButton("播放")
-        self.play_btn.clicked.connect(self.toggle_play)
         button_layout.addWidget(self.play_btn)
         
         # 前进/后退按钮
         self.back_btn = QPushButton("后退5秒")
-        self.back_btn.clicked.connect(lambda: self.seek_relative(-5))
         button_layout.addWidget(self.back_btn)
         
         self.forward_btn = QPushButton("前进5秒")
-        self.forward_btn.clicked.connect(lambda: self.seek_relative(5))
         button_layout.addWidget(self.forward_btn)
         
         control_layout.addLayout(button_layout)
@@ -220,7 +170,7 @@ class VideoAnnotator(QMainWindow):
         # 标注列表
         self.annotation_list = QListWidget()
         self.annotation_list.setSelectionMode(QListWidget.SingleSelection)
-        self.annotation_list.itemDoubleClicked.connect(self.jump_to_annotation)
+        # 延迟连接双击事件，因为初始化时annotation_manager已存在但尚未连接UI信号
         annotation_list_layout.addWidget(self.annotation_list)
         
         annotation_list_group.setLayout(annotation_list_layout)
@@ -243,31 +193,30 @@ class VideoAnnotator(QMainWindow):
         
         # 添加标注按钮
         self.add_annotation_btn = QPushButton("添加标注 (Ctrl+1/2)")
-        self.add_annotation_btn.clicked.connect(self.add_annotation)
+        self.add_annotation_btn.clicked.connect(self.annotation_manager.add_annotation)
         annotation_control_layout.addWidget(self.add_annotation_btn)
         
         # 删除标注按钮
         self.delete_annotation_btn = QPushButton("删除选中标注")
-        self.delete_annotation_btn.clicked.connect(self.delete_annotation)
+        self.delete_annotation_btn.clicked.connect(self.annotation_manager.delete_annotation)
         annotation_control_layout.addWidget(self.delete_annotation_btn)
         
         # 清除所有标注按钮
         self.clear_annotations_btn = QPushButton("清除所有标注")
-        self.clear_annotations_btn.clicked.connect(self.clear_annotations)
+        self.clear_annotations_btn.clicked.connect(self.annotation_manager.clear_annotations)
         annotation_control_layout.addWidget(self.clear_annotations_btn)
         
         # 保存标注按钮
         self.save_annotation_btn = QPushButton("保存标注")
-        self.save_annotation_btn.clicked.connect(self.save_annotations)
+        self.save_annotation_btn.clicked.connect(self.annotation_manager.save_annotations)
         annotation_control_layout.addWidget(self.save_annotation_btn)
         
         # 加载标注按钮
         self.load_annotation_btn = QPushButton("加载标注")
-        self.load_annotation_btn.clicked.connect(self.load_annotations)
+        self.load_annotation_btn.clicked.connect(self.annotation_manager.load_annotations)
         annotation_control_layout.addWidget(self.load_annotation_btn)
         
         # 当前标注状态
-        # self.status_label = QLabel("未加载视频")
         self.status_label = EllipsisLabel()
         self.status_label.setAlignment(Qt.AlignCenter)
         self.status_label.setStyleSheet("font-weight: bold;")
@@ -291,59 +240,6 @@ class VideoAnnotator(QMainWindow):
         
         self.setCentralWidget(main_widget)
     
-    def sort_annotations(self):
-        """
-        根据帧号进行排序：direct_cut 使用 frame，gradual 使用 start_frame
-        """
-        def annotation_sort_key(anno):
-            if anno["type"] == "direct_cut":
-                return anno["frame"]
-            else:  # gradual
-                return anno["start_frame"]
-        self.annotations.sort(key=annotation_sort_key)
-
-    def refresh_annotation_list(self):
-        """
-        根据当前 self.annotations 刷新列表显示
-        """
-        self.annotation_list.clear()
-        for anno in self.annotations:
-            if anno["type"] == "direct_cut":
-                item_text = f"直接切换于 {anno['time']} (帧 {anno['frame']})"
-            else:
-                item_text = (
-                    f"渐变过渡: {anno['start_time']} - {anno['end_time']} "
-                    f"(帧 {anno['start_frame']} - {anno['end_frame']})"
-                )
-            self.annotation_list.addItem(item_text)
-
-    def scrub_video(self, value):
-        """
-        鼠标拖拽滑块时（包括从轨道外点击并立即拖动），实时更新画面。
-        """
-        if self.cap is None:
-            return
-
-        # 暂停播放（可根据需要决定是否保持播放状态）
-        # if self.playing:
-        #     self.toggle_play()
-        #     self._was_playing = True
-
-        # 将当前拖拽位置映射到帧数，保存为 self.current_frame
-        self.current_frame = value
-        # 如果想要"实时"预览，则需要标记"需要跳转"并立刻刷新
-        if self.is_dragging:
-            self.need_jump = True
-            
-            # 添加节流控制
-            current_time = time.time() * 1000  # 转换为毫秒
-            time_elapsed = current_time - self.last_update_time
-            
-            # 节流控制：只有当经过了足够的时间间隔或者是拖动开始/结束时才更新帧
-            if time_elapsed >= self.throttle_interval:
-                self.update_frame()
-                self.last_update_time = current_time
-
     def create_menu(self):
         """创建菜单栏"""
         menubar = self.menuBar()
@@ -362,13 +258,13 @@ class VideoAnnotator(QMainWindow):
         # 加载标注
         load_action = QAction('加载标注', self)
         load_action.setShortcut('Ctrl+L')
-        load_action.triggered.connect(self.load_annotations)
+        load_action.triggered.connect(self.annotation_manager.load_annotations)
         file_menu.addAction(load_action)
         
         # 保存标注
         save_action = QAction('保存标注', self)
         save_action.setShortcut('Ctrl+S')
-        save_action.triggered.connect(self.save_annotations)
+        save_action.triggered.connect(self.annotation_manager.save_annotations)
         file_menu.addAction(save_action)
         
         file_menu.addSeparator()
@@ -385,7 +281,7 @@ class VideoAnnotator(QMainWindow):
         # 播放/暂停
         self.play_action = QAction('播放/暂停', self)
         self.play_action.setShortcut('Space')
-        self.play_action.triggered.connect(self.toggle_play)
+        self.play_action.triggered.connect(self.video_player.toggle_play)
         playback_menu.addAction(self.play_action)
         
         # 向前跳转
@@ -393,17 +289,17 @@ class VideoAnnotator(QMainWindow):
         
         self.forward_5s_action = QAction('前进5秒', self)
         self.forward_5s_action.setShortcut('Right')
-        self.forward_5s_action.triggered.connect(lambda: self.seek_relative(5))
+        self.forward_5s_action.triggered.connect(lambda: self.video_player.seek_relative(5))
         forward_menu.addAction(self.forward_5s_action)
         
         self.forward_1s_action = QAction('前进1秒', self)
         self.forward_1s_action.setShortcut('Alt+Right')
-        self.forward_1s_action.triggered.connect(lambda: self.seek_relative(1))
+        self.forward_1s_action.triggered.connect(lambda: self.video_player.seek_relative(1))
         forward_menu.addAction(self.forward_1s_action)
         
         self.forward_5f_action = QAction('前进5帧', self)
         self.forward_5f_action.setShortcut('Shift+Right')
-        self.forward_5f_action.triggered.connect(lambda: self.seek_frames(5))
+        self.forward_5f_action.triggered.connect(lambda: self.video_player.seek_frames(5))
         forward_menu.addAction(self.forward_5f_action)
         
         playback_menu.addMenu(forward_menu)
@@ -413,17 +309,17 @@ class VideoAnnotator(QMainWindow):
         
         self.backward_5s_action = QAction('后退5秒', self)
         self.backward_5s_action.setShortcut('Left')
-        self.backward_5s_action.triggered.connect(lambda: self.seek_relative(-5))
+        self.backward_5s_action.triggered.connect(lambda: self.video_player.seek_relative(-5))
         backward_menu.addAction(self.backward_5s_action)
         
         self.backward_1s_action = QAction('后退1秒', self)
         self.backward_1s_action.setShortcut('Alt+Left')
-        self.backward_1s_action.triggered.connect(lambda: self.seek_relative(-1))
+        self.backward_1s_action.triggered.connect(lambda: self.video_player.seek_relative(-1))
         backward_menu.addAction(self.backward_1s_action)
         
         self.backward_5f_action = QAction('后退5帧', self)
         self.backward_5f_action.setShortcut('Shift+Left')
-        self.backward_5f_action.triggered.connect(lambda: self.seek_frames(-5))
+        self.backward_5f_action.triggered.connect(lambda: self.video_player.seek_frames(-5))
         backward_menu.addAction(self.backward_5f_action)
         
         playback_menu.addMenu(backward_menu)
@@ -434,12 +330,12 @@ class VideoAnnotator(QMainWindow):
         # 添加标注
         self.add_direct_action = QAction('添加直接切换', self)
         self.add_direct_action.setShortcut('Ctrl+1')
-        self.add_direct_action.triggered.connect(lambda: self.add_annotation_with_template(0))
+        self.add_direct_action.triggered.connect(lambda: self.annotation_manager.add_annotation_with_template(0))
         annotation_menu.addAction(self.add_direct_action)
         
         self.add_gradual_action = QAction('添加渐变过渡', self)
         self.add_gradual_action.setShortcut('Ctrl+2')
-        self.add_gradual_action.triggered.connect(lambda: self.add_annotation_with_template(1))
+        self.add_gradual_action.triggered.connect(lambda: self.annotation_manager.add_annotation_with_template(1))
         annotation_menu.addAction(self.add_gradual_action)
         
         annotation_menu.addSeparator()
@@ -447,16 +343,16 @@ class VideoAnnotator(QMainWindow):
         # 删除标注
         self.delete_action = QAction('删除选中标注', self)
         self.delete_action.setShortcut('Delete')
-        self.delete_action.triggered.connect(self.delete_annotation)
+        self.delete_action.triggered.connect(self.annotation_manager.delete_annotation)
         annotation_menu.addAction(self.delete_action)
         
         # 清除所有标注
         clear_action = QAction('清除所有标注', self)
-        clear_action.triggered.connect(self.clear_annotations)
+        clear_action.triggered.connect(self.annotation_manager.clear_annotations)
         annotation_menu.addAction(clear_action)
     
     def toggle_controls(self, enabled=True):
-        """启用/禁用需要视频加载才能使用的控件"""
+        """启用/禁用需要视频加载后才能使用的控件"""
         self.play_btn.setEnabled(enabled)
         self.back_btn.setEnabled(enabled)
         self.forward_btn.setEnabled(enabled)
@@ -467,9 +363,7 @@ class VideoAnnotator(QMainWindow):
         self.save_annotation_btn.setEnabled(enabled)
     
     def setup_shortcuts(self):
-        """设置快捷键
-        注：所有快捷键已在创建菜单时设置，此处不再重复设置
-        """
+        """设置快捷键 (所有快捷键已在创建菜单时设置) """
         pass
     
     def eventFilter(self, obj, event):
@@ -480,548 +374,52 @@ class VideoAnnotator(QMainWindow):
         return super().eventFilter(obj, event)
     
     def open_video(self):
-        file_path, _ = QFileDialog.getOpenFileName(self, "打开视频", "", "视频文件 (*.mp4 *.avi *.mkv *.mov)")
+        """打开视频文件"""
+        success = self.video_player.open_video()
         
-        if not file_path:
-            return
-        
-        # 关闭之前打开的视频
-        if self.cap is not None:
-            self.cap.release()
-            self.cap = None
-        
-        try:
-            self.cap = cv2.VideoCapture(file_path)
-            
-            if not self.cap.isOpened():
-                raise IOError(f"无法打开视频文件: {file_path}")
-            
-            # 获取视频属性
-            self.frame_count = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            self.fps = self.cap.get(cv2.CAP_PROP_FPS)
-            self.video_width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            self.video_height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            
-            if self.frame_count <= 0 or self.fps <= 0:
-                raise ValueError("检测到无效的视频属性")
-            
-            self.current_frame = 0
-            self.video_path = file_path
-            
-            # 设置滑块范围
-            self.slider.setMaximum(self.frame_count - 1)
-            self.slider.setValue(0)
-            
-            # 更新显示
-            self.update_frame()
-            
-            # 清空标注
-            self.annotations = []
-            self.annotation_list.clear()
-            self.temp_annotation = None
-            
+        if success:
             # 设置窗口标题
-            self.setWindowTitle(f"视频镜头边界标注工具 - {os.path.basename(file_path)}")
+            file_name = os.path.basename(self.video_player.video_path)
+            self.setWindowTitle(f"视频镜头边界标注工具 - {file_name}")
+            
+            # 重置标注管理器
+            self.annotation_manager.reset()
             
             # 启用控件
             self.toggle_controls(True)
             
             # 更新状态
-            self.status_label.setText(f"已加载: {os.path.basename(file_path)} ({self.video_width}x{self.video_height})")
+            self.status_label.setText(
+                f"已加载: {file_name} ({self.video_player.video_width}x{self.video_player.video_height})"
+            )
             
-            # 根据视频长宽比调整界面布局
+            # 调整界面布局
             self.adjust_layout_for_video()
-            
-        except Exception as e:
-            QMessageBox.critical(self, "错误", f"打开视频失败: {str(e)}")
-            self.cap = None
-            self.toggle_controls(False)
     
-    def update_frame(self):
-        if self.cap is None:
-            return
+    def request_open_video(self, file_path):
+        """处理来自AnnotationManager的打开视频请求"""
+        if not os.path.exists(file_path):
+            QMessageBox.warning(self, "警告", f"视频文件不存在: {file_path}")
+            return False
         
-        try:
-            # 如果当前帧超出范围，设置为最后一帧
-            if self.current_frame >= self.frame_count:
-                self.current_frame = self.frame_count - 1
-                self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame)
-                self.playing = False
-                self.play_btn.setText("播放")
-                self.timer.stop()
-            
-            if self.need_jump:
-                # 只有在需要跳转时才调用 cap.set
-                self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame)
-                self.need_jump = False
-            else:
-                # 如果不需要跳转，就说明仍在顺序播放逻辑里，
-                # 直接用 read() 读取下一帧即可（前面已经读过上一帧了）。
-                pass
-            
-            # 这里直接顺序读取即可
-            ret, frame = self.cap.read()
-            
-            if not ret:
-                # 读取失败，可能是到达了视频末尾
-                self.timer.stop()
-                self.playing = False
-                self.play_btn.setText("播放")
-                # 设置为最后一帧
-                self.current_frame = self.frame_count - 1
-                self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame)
-                ret, frame = self.cap.read()
-                if not ret:
-                    # 如果仍然无法读取，说明视频文件可能有问题
-                    return
-            
-            # 转换颜色空间
-            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            
-            # 转换为QImage
-            h, w, ch = rgb_frame.shape
-            bytes_per_line = ch * w
-            q_img = QImage(rgb_frame.data, w, h, bytes_per_line, QImage.Format_RGB888)
-            
-            # 调整大小以适应标签
-            pixmap = QPixmap.fromImage(q_img)
-            
-            # 计算适当的大小来保持纵横比
-            label_size = self.video_label.size()
-            scaled_pixmap = pixmap.scaled(label_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            
-            # 显示帧
-            self.video_label.setPixmap(scaled_pixmap)
-            
-            # 更新时间标签
-            current_time = self.frame_to_time(self.current_frame)
-            total_time = self.frame_to_time(self.frame_count)
-            self.time_label.setText(f"{current_time} / {total_time}")
-            
-            # 更新滑块位置（不触发valueChanged信号）
-            self.slider.blockSignals(True)
-            self.slider.setValue(self.current_frame)
-            self.slider.blockSignals(False)
-            
-            # 如果处于播放状态，播放下一帧
-            if self.playing and not self.is_dragging:
-                self.current_frame += 1
-                
-                # 如果到达视频结尾，停止播放
-                if self.current_frame >= self.frame_count:
-                    self.toggle_play()
-            
-        except Exception as e:
-            self.timer.stop()
-            self.playing = False
-            self.play_btn.setText("播放")
-            QMessageBox.critical(self, "错误", f"显示帧时出错: {str(e)}")
+        self.video_player.video_path = file_path
+        return self.video_player.open_video(file_path)
+    
+    def seek_to_frame(self, frame):
+        """提供给AnnotationManager的跳转到指定帧的方法"""
+        self.video_player.seek_to_frame(frame)
     
     def frame_to_time(self, frame_number):
-        """将帧数转换为时间字符串"""
-        if self.fps <= 0:
-            return "00:00:00"
-        
-        seconds = frame_number / self.fps
-        time_obj = timedelta(seconds=seconds)
-        return str(time_obj).split('.')[0]  # 去掉毫秒部分
+        """提供给AnnotationManager的帧到时间的转换方法"""
+        return self.video_player.frame_to_time(frame_number)
     
-    def time_to_frame(self, time_str):
-        """将时间字符串转换为帧数"""
-        try:
-            h, m, s = map(int, time_str.split(':'))
-            total_seconds = h * 3600 + m * 60 + s
-            return int(total_seconds * self.fps)
-        except:
-            return 0
-    
-    def toggle_play(self):
-        """切换播放/暂停状态"""
-        if self.cap is None:
-            return
-        
-        self.playing = not self.playing
-        
-        if self.playing:
-            self.play_btn.setText("暂停")
-            self.timer.start(int(1000 / (self.fps)))  # 帧率的两倍来确保流畅播放
-        else:
-            self.play_btn.setText("播放")
-            self.timer.stop()
-    
-    def slider_pressed(self):
-        """按下滑块时暂停视频"""
-        if self.playing:
-            self.toggle_play()
-            self._was_playing = True
-        else:
-            self._was_playing = False
-
-        self.is_dragging = True
-        # 重置节流时间，确保拖动开始时立即显示第一帧
-        self.last_update_time = 0
-    
-    def slider_released(self):
-        """释放滑块后跳转到相应位置"""
-        self.current_frame = self.slider.value()
-        self.is_dragging = False
-        self.need_jump = True
-        self.update_frame()
-        # 重置上次更新时间
-        self.last_update_time = time.time() * 1000
-        
-        # 如果之前是播放状态，则恢复播放
-        if self._was_playing:
-            self.toggle_play()
-        # 重置状态，防止残留
-        self._was_playing = False
-
-    def seek_relative(self, seconds):
-        """相对跳转（秒）"""
-        if self.cap is None:
-            return
-        
-        target_frame = self.current_frame + int(seconds * self.fps)
-        target_frame = max(0, min(target_frame, self.frame_count - 1))
-        self.current_frame = target_frame
-        self.need_jump = True
-        self.update_frame()
-    
-    def seek_frames(self, frames):
-        """相对跳转（帧）"""
-        if self.cap is None:
-            return
-        
-        target_frame = self.current_frame + frames
-        target_frame = max(0, min(target_frame, self.frame_count - 1))
-        self.current_frame = target_frame
-        self.need_jump = True
-        self.update_frame()
-    
-    def jump_to_annotation(self, item):
-        """双击标注项跳转到对应位置"""
-        idx = self.annotation_list.row(item)
-        
-        if idx < 0 or idx >= len(self.annotations):
-            return
-        
-        anno = self.annotations[idx]
-        if anno["type"] == "direct_cut":
-            target_frame = anno["frame"]
-        else:  # gradual
-            target_frame = anno["start_frame"]
-        
-        self.current_frame = target_frame
-        self.need_jump = True
-        self.update_frame()
-    
-    def add_annotation_with_template(self, template_index):
-        """使用指定模板添加标注"""
-        if self.cap is None:
-            return
-        
-        self.template_combo.setCurrentIndex(template_index)
-        self.add_annotation()
-    
-    def add_annotation(self):
-        """添加标注"""
-        if self.cap is None:
-            QMessageBox.warning(self, "警告", "请先打开视频文件。")
-            return
-        
-        template_index = self.template_combo.currentIndex()
-        current_time = self.frame_to_time(self.current_frame)
-        
-        if template_index == 0:  # 模板1：直接切换
-            annotation = {
-                "type": "direct_cut",
-                "time": current_time,
-                "frame": self.current_frame
-            }
-            self.annotations.append(annotation)
-            item_text = f"直接切换于 {current_time} (帧 {self.current_frame})"
-            self.annotation_list.addItem(item_text)
-            self.status_label.setText(f"已添加: {item_text}")
-        
-        elif template_index == 1:  # 模板2：渐变过渡
-            if self.temp_annotation is None:  # 开始标注
-                self.temp_annotation = {
-                    "type": "gradual",
-                    "start_time": current_time,
-                    "start_frame": self.current_frame,
-                    "end_time": None,
-                    "end_frame": None
-                }
-                item_text = f"渐变过渡开始于 {current_time} (帧 {self.current_frame})"
-                self.annotation_list.addItem(item_text)
-                self.status_label.setText("已开始渐变过渡标注。请用Ctrl+2标记结束位置。")
-            else:  # 结束标注
-                if self.current_frame <= self.temp_annotation["start_frame"]:
-                    QMessageBox.warning(self, "警告", "结束帧必须在开始帧之后。")
-                    return
-                
-                self.temp_annotation["end_time"] = current_time
-                self.temp_annotation["end_frame"] = self.current_frame
-                self.annotations.append(self.temp_annotation)
-                
-                # 更新列表项
-                self.annotation_list.takeItem(self.annotation_list.count() - 1)
-                item_text = (f"渐变过渡: {self.temp_annotation['start_time']} - {current_time} "
-                           f"(帧 {self.temp_annotation['start_frame']} - {self.current_frame})")
-                self.annotation_list.addItem(item_text)
-                self.status_label.setText(f"已添加: {item_text}")
-                
-                self.temp_annotation = None
-        
-        # 滚动到最新添加的项
-        # self.annotation_list.scrollToBottom()
-        self.sort_annotations()
-        self.refresh_annotation_list()
-    
-    def delete_annotation(self):
-        """删除选中的标注"""
-        current_row = self.annotation_list.currentRow()
-        if current_row == -1:
-            QMessageBox.warning(self, "警告", "请选择要删除的标注。")
-            return
-        
-        # 如果是临时标注状态，需要重置
-        if self.temp_annotation is not None and current_row == self.annotation_list.count() - 1:
-            self.temp_annotation = None
-            self.status_label.setText("已取消渐变过渡标注")
-        else:
-            deleted_annotation = self.annotations.pop(current_row)
-            self.status_label.setText(f"已删除于 {deleted_annotation.get('time', '') or deleted_annotation.get('start_time', '')} 的标注")
-        
-        self.annotation_list.takeItem(current_row)
-
-        self.sort_annotations()
-        self.refresh_annotation_list()
-    
-    def clear_annotations(self):
-        """清除所有标注"""
-        if not self.annotations and self.temp_annotation is None:
-            return
-        
-        reply = QMessageBox.question(self, "清除标注", 
-                                    "确定要清除所有标注吗？",
-                                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-        
-        if reply == QMessageBox.Yes:
-            self.annotations = []
-            self.annotation_list.clear()
-            self.temp_annotation = None
-            self.status_label.setText("已清除所有标注")
-    
-    def save_annotations(self):
-        """保存标注"""
-        if not self.annotations and self.temp_annotation is None:
-            QMessageBox.warning(self, "警告", "没有标注可保存。")
-            return
-        
-        # 如果有临时标注未完成，提示用户
-        if self.temp_annotation is not None:
-            reply = QMessageBox.question(self, "未完成的标注", 
-                                        "你有一个未完成的渐变过渡标注。要舍弃它吗？",
-                                        QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-            if reply == QMessageBox.No:
-                return
-        
-        # 如果有视频文件，使用视频文件名作为默认保存名
-        default_name = ""
-        if self.video_path:
-            base_name = os.path.splitext(os.path.basename(self.video_path))[0]
-            default_name = f"{base_name}_annotations"
-        
-        file_path, filter_used = QFileDialog.getSaveFileName(self, "保存标注", default_name, 
-                                                 "JSON文件 (*.json);;CSV文件 (*.csv)")
-        
-        if not file_path:
-            return
-        
-        # 根据选择的过滤器确保文件扩展名正确
-        if filter_used == "JSON文件 (*.json)" and not file_path.lower().endswith('.json'):
-            file_path += '.json'
-        elif filter_used == "CSV文件 (*.csv)" and not file_path.lower().endswith('.csv'):
-            file_path += '.csv'
-        
-        file_ext = os.path.splitext(file_path)[1].lower()
-        
-        try:
-            if file_ext == '.json':
-                self.save_as_json(file_path)
-            elif file_ext == '.csv':
-                self.save_as_csv(file_path)
-            else:
-                QMessageBox.warning(self, "警告", "不支持的文件格式。请使用.json或.csv")
-                return
-            
-            QMessageBox.information(self, "成功", f"标注已保存到 {file_path}")
-            self.status_label.setText(f"已保存{len(self.annotations)}个标注到 {os.path.basename(file_path)}")
-            
-        except Exception as e:
-            QMessageBox.critical(self, "错误", f"保存标注失败: {str(e)}")
-    
-    def load_annotations(self):
-        """加载标注"""
-        file_path, _ = QFileDialog.getOpenFileName(self, "加载标注", "", 
-                                                 "JSON文件 (*.json);;CSV文件 (*.csv);;所有文件 (*)")
-        
-        if not file_path:
-            return
-        
-        file_ext = os.path.splitext(file_path)[1].lower()
-        
-        try:
-            if file_ext == '.json':
-                self.load_from_json(file_path)
-            elif file_ext == '.csv':
-                self.load_from_csv(file_path)
-            else:
-                QMessageBox.warning(self, "警告", "不支持的文件格式。请使用.json或.csv")
-                return
-            
-            QMessageBox.information(self, "成功", f"已从 {file_path} 加载 {len(self.annotations)} 个标注")
-            self.status_label.setText(f"已从 {os.path.basename(file_path)} 加载 {len(self.annotations)} 个标注")
-            
-        except Exception as e:
-            QMessageBox.critical(self, "错误", f"加载标注失败: {str(e)}")
-    
-    def save_as_json(self, file_path):
-        """将标注保存为JSON格式"""
-        if not self.video_path:
-            raise ValueError("未加载视频")
-        
-        video_info = {
-            "filename": os.path.basename(self.video_path),
-            "filepath": self.video_path,
-            "frame_count": self.frame_count,
-            "fps": self.fps,
-            "duration": self.frame_to_time(self.frame_count)
-        }
-        
-        data = {
-            "video_info": video_info,
-            "annotations": self.annotations
-        }
-        
-        with open(file_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=4, ensure_ascii=False)
-    
-    def save_as_csv(self, file_path):
-        """将标注保存为CSV格式"""
-        headers = ["type", "start_time", "start_frame", "end_time", "end_frame"]
-        
-        with open(file_path, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.DictWriter(f, fieldnames=headers)
-            writer.writeheader()
-            
-            for anno in self.annotations:
-                row = {}
-                if anno["type"] == "direct_cut":
-                    row = {
-                        "type": "direct_cut",
-                        "start_time": anno["time"],
-                        "start_frame": anno["frame"],
-                        "end_time": "",
-                        "end_frame": ""
-                    }
-                else:  # gradual
-                    row = {
-                        "type": "gradual",
-                        "start_time": anno["start_time"],
-                        "start_frame": anno["start_frame"],
-                        "end_time": anno["end_time"],
-                        "end_frame": anno["end_frame"]
-                    }
-                writer.writerow(row)
-    
-    def load_from_json(self, file_path):
-        """从JSON文件加载标注"""
-        with open(file_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        
-        # 清除现有标注
-        self.annotations = []
-        self.annotation_list.clear()
-        self.temp_annotation = None
-        
-        # 检查是否需要加载视频
-        if self.cap is None and 'video_info' in data and 'filepath' in data['video_info']:
-            video_path = data['video_info']['filepath']
-            if os.path.exists(video_path):
-                reply = QMessageBox.question(self, "加载视频", 
-                                            f"是否加载关联的视频文件？\n{video_path}",
-                                            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
-                if reply == QMessageBox.Yes:
-                    self.video_path = video_path
-                    self.open_video()
-        
-        # 加载标注
-        if 'annotations' in data:
-            self.annotations = data['annotations']
-            
-            # 更新列表
-            for anno in self.annotations:
-                if anno["type"] == "direct_cut":
-                    item_text = f"直接切换于 {anno['time']} (帧 {anno['frame']})"
-                else:  # gradual
-                    item_text = (f"渐变过渡: {anno['start_time']} - {anno['end_time']} "
-                               f"(帧 {anno['start_frame']} - {anno['end_frame']})")
-                self.annotation_list.addItem(item_text)
-    
-        self.sort_annotations()
-        self.refresh_annotation_list()
-    
-    def load_from_csv(self, file_path):
-        """从CSV文件加载标注"""
-        # 清除现有标注
-        self.annotations = []
-        self.annotation_list.clear()
-        self.temp_annotation = None
-        
-        with open(file_path, 'r', newline='', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            
-            for row in reader:
-                if row["type"] == "direct_cut":
-                    annotation = {
-                        "type": "direct_cut",
-                        "time": row["start_time"],
-                        "frame": int(row["start_frame"])
-                    }
-                    self.annotations.append(annotation)
-                    item_text = f"直接切换于 {row['start_time']} (帧 {row['start_frame']})"
-                else:  # gradual
-                    annotation = {
-                        "type": "gradual",
-                        "start_time": row["start_time"],
-                        "start_frame": int(row["start_frame"]),
-                        "end_time": row["end_time"],
-                        "end_frame": int(row["end_frame"])
-                    }
-                    self.annotations.append(annotation)
-                    item_text = (f"渐变过渡: {row['start_time']} - {row['end_time']} "
-                               f"(帧 {row['start_frame']} - {row['end_frame']})")
-                
-                self.annotation_list.addItem(item_text)
-        
-        self.sort_annotations()
-        self.refresh_annotation_list()
-    
-    def closeEvent(self, event):
-        """关闭窗口时释放资源"""
-        if self.cap is not None:
-            self.cap.release()
-        event.accept()
-
     def adjust_layout_for_video(self):
         """根据视频长宽比调整界面布局"""
-        if self.video_width <= 0 or self.video_height <= 0:
+        if not hasattr(self.video_player, 'video_width') or self.video_player.video_width <= 0 or self.video_player.video_height <= 0:
             return
         
         # 计算视频长宽比
-        aspect_ratio = self.video_width / self.video_height
+        aspect_ratio = self.video_player.video_width / self.video_player.video_height
         
         # 获取当前窗口大小
         window_width = self.width()
@@ -1058,25 +456,17 @@ class VideoAnnotator(QMainWindow):
         self.centralWidget().layout().activate()
         
         # 更新显示的第一帧
-        self.update_frame()
+        self.video_player.update_frame()
 
     def resizeEvent(self, event):
         """窗口大小调整事件，用于调整视频显示"""
         super().resizeEvent(event)
         
         # 如果已加载视频，在窗口大小改变时更新帧显示
-        if self.cap is not None:
-            self.update_frame()
-
-def main():
-    app = QApplication(sys.argv)
+        if hasattr(self.video_player, 'cap') and self.video_player.cap is not None:
+            self.video_player.update_frame()
     
-    # 设置应用样式
-    app.setStyle('Fusion')
-    
-    window = VideoAnnotator()
-    window.show()
-    sys.exit(app.exec_())
-
-if __name__ == "__main__":
-    main()
+    def closeEvent(self, event):
+        """关闭窗口时释放资源"""
+        self.video_player.close()
+        event.accept()
