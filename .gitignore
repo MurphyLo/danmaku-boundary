@@ -1,4 +1,6 @@
 videos/*
 annotations/*
 
+autoshot_results/*
+
 __pycache__

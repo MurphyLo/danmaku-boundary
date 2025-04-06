@@ -165,3 +165,72 @@ main.py
 ## 许可证
 
 MIT
+
+## 工具脚本：场景边界到转场标注转换
+
+`scene_to_transition.py` 是一个用于将场景边界文件（_scenes.txt）转换为转场标注文件（_annotations.csv）的工具。
+
+### 使用方法
+
+```bash
+python scene_to_transition.py [--fps FPS] [--gap GAP] [--output OUTPUT_DIR] [--input INPUT_FILES] [--dir SEARCH_DIR]
+```
+
+参数说明：
+- `--fps FPS`：视频的帧率，默认为24.0
+- `--gap GAP`：判断是否为直接切换的帧间隔阈值，默认为1
+- `--output OUTPUT_DIR`：输出目录，默认为"annotations/当前时间戳"（时间戳格式为"mmdd_hhmm"）
+- `--input INPUT_FILES`：输入的_scenes.txt文件路径，不指定则搜索给定目录下的所有文件
+- `--dir SEARCH_DIR`：要搜索的目录，默认为当前目录
+
+示例：
+```bash
+# 使用默认参数
+python scene_to_transition.py
+
+# 指定帧率和间隔阈值
+python scene_to_transition.py --fps 30 --gap 2
+
+# 指定输出目录
+python scene_to_transition.py --output annotations/my_output
+
+# 指定搜索目录
+python scene_to_transition.py --dir /path/to/data
+
+# 处理特定文件
+python scene_to_transition.py --input test_data/BV1vW41147Uw_2_scenes.txt
+```
+
+### 输出目录结构
+
+脚本默认将结果保存在以当前时间命名的目录中（格式为"annotations/mmdd_hhmm"）。例如：
+
+```
+annotations/
+└── 0406_1703/
+    ├── BV1vW41147Uw_2_annotations.csv
+    └── BV1vW41147Uw_3_annotations.csv
+```
+
+### 输入文件格式
+
+输入文件格式如下：
+```
+镜头边界检测结果
+阈值: 0.296
+场景列表 (起始帧, 结束帧):
+0, 16
+17, 287
+...
+```
+
+### 输出文件格式
+
+输出文件为CSV格式，包含以下列：
+- type：转场类型，direct_cut（直接切换）或gradual（渐变过渡）
+- start_time：转场开始时间，格式为HH:MM:SS
+- start_frame：转场开始帧
+- end_time：转场结束时间（仅渐变过渡有值），格式为HH:MM:SS
+- end_frame：转场结束帧（仅渐变过渡有值）
+
+输出文件名格式为：原始文件名.replace('_scenes.txt', '_annotations.csv')

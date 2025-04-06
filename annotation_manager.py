@@ -149,25 +149,33 @@ class AnnotationManager:
             if reply == QMessageBox.No:
                 return
         
-        default_name = ""
-        if self.main_window.video_player.video_path:
-            base_name = os.path.splitext(os.path.basename(self.main_window.video_player.video_path))[0]
-            default_name = f"{base_name}_annotations"
-        
-        file_path, filter_used = QFileDialog.getSaveFileName(self.main_window, "保存标注", default_name, 
-                                                 "JSON文件 (*.json);;CSV文件 (*.csv)")
-        
-        if not file_path:
-            return
-        
-        if filter_used == "JSON文件 (*.json)" and not file_path.lower().endswith('.json'):
-            file_path += '.json'
-        elif filter_used == "CSV文件 (*.csv)" and not file_path.lower().endswith('.csv'):
-            file_path += '.csv'
-        
-        file_ext = os.path.splitext(file_path)[1].lower()
-        
         try:
+            default_name = ""
+            if self.main_window.video_player.video_path:
+                base_name = os.path.splitext(os.path.basename(self.main_window.video_player.video_path))[0]
+                default_name = f"{base_name}_annotations"
+            
+            # 使用原生文件对话框
+            dialog = QFileDialog(self.main_window, "保存标注", default_name, 
+                                "CSV文件 (*.csv);;JSON文件 (*.json)")
+            dialog.setOption(QFileDialog.DontUseNativeDialog, False)  # 强制使用原生对话框
+            dialog.setAcceptMode(QFileDialog.AcceptSave)
+            dialog.setFileMode(QFileDialog.AnyFile)
+            dialog.setOption(QFileDialog.ReadOnly, True)  # 只读模式减少文件访问操作
+            
+            if dialog.exec_() != QFileDialog.Accepted:
+                return
+                
+            file_path = dialog.selectedFiles()[0]
+            filter_used = dialog.selectedNameFilter()
+            
+            if filter_used == "JSON文件 (*.json)" and not file_path.lower().endswith('.json'):
+                file_path += '.json'
+            elif filter_used == "CSV文件 (*.csv)" and not file_path.lower().endswith('.csv'):
+                file_path += '.csv'
+            
+            file_ext = os.path.splitext(file_path)[1].lower()
+            
             if file_ext == '.json':
                 self.save_as_json(file_path)
             elif file_ext == '.csv':
@@ -178,21 +186,26 @@ class AnnotationManager:
             
             QMessageBox.information(self.main_window, "成功", f"标注已保存到 {file_path}")
             self.main_window.status_label.setText(f"已保存{len(self.annotations)}个标注到 {os.path.basename(file_path)}")
-            
         except Exception as e:
             QMessageBox.critical(self.main_window, "错误", f"保存标注失败: {str(e)}")
 
     def load_annotations(self):
         """加载标注"""
-        file_path, _ = QFileDialog.getOpenFileName(self.main_window, "加载标注", "", 
-                                                 "JSON文件 (*.json);;CSV文件 (*.csv);;所有文件 (*)")
-        
-        if not file_path:
-            return
-        
-        file_ext = os.path.splitext(file_path)[1].lower()
-        
+        # 使用原生文件对话框
         try:
+            dialog = QFileDialog(self.main_window, "加载标注", "", 
+                               "CSV文件 (*.csv);;JSON文件 (*.json);;所有文件 (*)")
+            dialog.setOption(QFileDialog.DontUseNativeDialog, False)  # 强制使用原生对话框
+            dialog.setFileMode(QFileDialog.ExistingFile)
+            dialog.setOption(QFileDialog.ReadOnly, True)  # 只读模式减少文件访问操作
+            
+            if dialog.exec_() != QFileDialog.Accepted:
+                return
+                
+            file_path = dialog.selectedFiles()[0]
+            
+            file_ext = os.path.splitext(file_path)[1].lower()
+            
             if file_ext == '.json':
                 self.load_from_json(file_path)
             elif file_ext == '.csv':
@@ -203,10 +216,10 @@ class AnnotationManager:
             
             QMessageBox.information(self.main_window, "成功", f"已从 {file_path} 加载 {len(self.annotations)} 个标注")
             self.main_window.status_label.setText(f"已从 {os.path.basename(file_path)} 加载 {len(self.annotations)} 个标注")
-            
         except Exception as e:
-            QMessageBox.critical(self.main_window, "错误", f"加载标注失败: {str(e)}")
-    
+            # 已在load_from_json/csv中处理了错误显示，这里不需要重复显示
+            pass
+
     def save_as_json(self, file_path):
         """将标注保存为JSON格式"""
         if not self.main_window.video_player.video_path:
@@ -258,78 +271,94 @@ class AnnotationManager:
 
     def load_from_json(self, file_path):
         """从JSON文件加载标注"""
-        with open(file_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        
-        # 清除现有标注
-        self.annotations = []
-        self.main_window.annotation_list.clear()
-        self.temp_annotation = None
-        
-        # 检查是否需要加载视频 (不直接调用 open_video，让主窗口处理)
-        load_associated_video = False
-        associated_video_path = None
-        if self.main_window.video_player.cap is None and 'video_info' in data and 'filepath' in data['video_info']:
-            video_path_from_json = data['video_info']['filepath']
-            if os.path.exists(video_path_from_json):
-                reply = QMessageBox.question(self.main_window, "加载视频", 
-                                            f"是否加载关联的视频文件？\n{video_path_from_json}",
-                                            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
-                if reply == QMessageBox.Yes:
-                    load_associated_video = True
-                    associated_video_path = video_path_from_json
-        
-        # 加载标注
-        if 'annotations' in data:
-            self.annotations = data['annotations']
-            # No need to add items here, refresh_annotation_list will handle it
+        try:
+            # 清除现有标注先，避免文件读取错误时留下部分标注
+            self.annotations = []
+            self.main_window.annotation_list.clear()
+            self.temp_annotation = None
             
-        self.sort_annotations()
-        self.refresh_annotation_list()
+            # 使用更高效的方式读取文件
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            # 检查是否需要加载视频 (不直接调用 open_video，让主窗口处理)
+            load_associated_video = False
+            associated_video_path = None
+            if self.main_window.video_player.cap is None and 'video_info' in data and 'filepath' in data['video_info']:
+                video_path_from_json = data['video_info']['filepath']
+                if os.path.exists(video_path_from_json):
+                    reply = QMessageBox.question(self.main_window, "加载视频", 
+                                                f"是否加载关联的视频文件？\n{video_path_from_json}",
+                                                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+                    if reply == QMessageBox.Yes:
+                        load_associated_video = True
+                        associated_video_path = video_path_from_json
+            
+            # 加载标注
+            if 'annotations' in data:
+                self.annotations = data['annotations']
+                
+            self.sort_annotations()
+            self.refresh_annotation_list()
 
-        # If user agreed, tell main window to load the video AFTER annotations are loaded
-        if load_associated_video and associated_video_path:
-             self.main_window.request_open_video(associated_video_path)
+            # If user agreed, tell main window to load the video AFTER annotations are loaded
+            if load_associated_video and associated_video_path:
+                 self.main_window.request_open_video(associated_video_path)
+        except Exception as e:
+            QMessageBox.critical(self.main_window, "错误", f"加载JSON标注失败: {str(e)}")
+            # 确保出错时清空标注列表
+            self.annotations = []
+            self.main_window.annotation_list.clear()
+            self.temp_annotation = None
+            raise e  # 向上抛出异常以便主函数处理
 
     def load_from_csv(self, file_path):
         """从CSV文件加载标注"""
-        # 清除现有标注
-        self.annotations = []
-        self.main_window.annotation_list.clear()
-        self.temp_annotation = None
-        
-        with open(file_path, 'r', newline='', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
+        try:
+            # 清除现有标注先，避免文件读取错误时留下部分标注
+            self.annotations = []
+            self.main_window.annotation_list.clear()
+            self.temp_annotation = None
             
-            for row in reader:
-                try:
-                    if row["type"] == "direct_cut":
-                        annotation = {
-                            "type": "direct_cut",
-                            "time": row["start_time"],
-                            "frame": int(row["start_frame"])
-                        }
-                    elif row["type"] == "gradual": # Check for gradual explicitly
-                        annotation = {
-                            "type": "gradual",
-                            "start_time": row["start_time"],
-                            "start_frame": int(row["start_frame"]),
-                            "end_time": row["end_time"],
-                            "end_frame": int(row["end_frame"])
-                        }
-                    else:
-                        print(f"Skipping unknown annotation type in CSV: {row['type']}")
-                        continue # Skip rows with unknown types
-                        
-                    self.annotations.append(annotation)
-                    # No need to add items here, refresh_annotation_list will handle it
-                except KeyError as e:
-                    print(f"Skipping row due to missing key: {e} in row {row}")
-                except ValueError as e:
-                     print(f"Skipping row due to invalid integer conversion: {e} in row {row}")
-        
-        self.sort_annotations()
-        self.refresh_annotation_list()
+            # 使用更高效的方式读取CSV
+            with open(file_path, 'r', newline='', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                
+                for row in reader:
+                    try:
+                        if row["type"] == "direct_cut":
+                            annotation = {
+                                "type": "direct_cut",
+                                "time": row["start_time"],
+                                "frame": int(row["start_frame"])
+                            }
+                        elif row["type"] == "gradual": # Check for gradual explicitly
+                            annotation = {
+                                "type": "gradual",
+                                "start_time": row["start_time"],
+                                "start_frame": int(row["start_frame"]),
+                                "end_time": row["end_time"],
+                                "end_frame": int(row["end_frame"])
+                            }
+                        else:
+                            print(f"Skipping unknown annotation type in CSV: {row['type']}")
+                            continue # Skip rows with unknown types
+                            
+                        self.annotations.append(annotation)
+                    except KeyError as e:
+                        print(f"Skipping row due to missing key: {e} in row {row}")
+                    except ValueError as e:
+                         print(f"Skipping row due to invalid integer conversion: {e} in row {row}")
+            
+            self.sort_annotations()
+            self.refresh_annotation_list()
+        except Exception as e:
+            QMessageBox.critical(self.main_window, "错误", f"加载CSV标注失败: {str(e)}")
+            # 确保出错时清空标注列表
+            self.annotations = []
+            self.main_window.annotation_list.clear()
+            self.temp_annotation = None
+            raise e  # 向上抛出异常以便主函数处理
 
     def jump_to_annotation(self, item):
         """双击标注项跳转到对应位置"""
