@@ -145,15 +145,17 @@ class VideoAnnotator(QMainWindow):
         shortcuts_layout = QGridLayout()
         
         shortcuts = [
-            ("右箭头", "前进5秒"),
             ("左箭头", "后退5秒"),
-            ("Alt+右箭头", "前进1秒"),
-            ("Alt+左箭头", "后退1秒"),
-            ("Shift+右箭头", "前进5帧"),
-            ("Shift+左箭头", "后退5帧"),
+            ("右箭头", "前进5秒"),
             ("空格", "播放/暂停"),
+            ("Alt+左箭头", "后退1秒"),
+            ("Alt+右箭头", "前进1秒"),
             ("Ctrl+1", "添加直接切换"),
-            ("Ctrl+2", "添加渐变过渡")
+            ("Shift+左箭头", "后退5帧"),
+            ("Shift+右箭头", "前进5帧"),
+            ("Ctrl+2", "添加渐变过渡"),
+            ("Ctrl+左箭头", "跳到上一标注点"),
+            ("Ctrl+右箭头", "跳到下一标注点"),
         ]
         
         for i, (key, desc) in enumerate(shortcuts):
@@ -331,6 +333,21 @@ class VideoAnnotator(QMainWindow):
         backward_menu.addAction(self.backward_5f_action)
         
         playback_menu.addMenu(backward_menu)
+        
+        # 添加在标注点之间跳转的菜单项
+        jump_menu = QMenu('标注点间跳转', self)
+        
+        self.jump_prev_anno_action = QAction('跳转到上一标注点', self)
+        self.jump_prev_anno_action.setShortcut('Ctrl+Left')
+        self.jump_prev_anno_action.triggered.connect(self.video_player.jump_to_previous_annotation)
+        jump_menu.addAction(self.jump_prev_anno_action)
+        
+        self.jump_next_anno_action = QAction('跳转到下一标注点', self)
+        self.jump_next_anno_action.setShortcut('Ctrl+Right')
+        self.jump_next_anno_action.triggered.connect(self.video_player.jump_to_next_annotation)
+        jump_menu.addAction(self.jump_next_anno_action)
+        
+        playback_menu.addMenu(jump_menu)
         
         # 标注菜单
         annotation_menu = menubar.addMenu('标注')

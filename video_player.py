@@ -380,3 +380,59 @@ class VideoPlayer:
         # 如果之前是播放状态，恢复播放
         if original_state:
             self.toggle_play() 
+    
+    def jump_to_previous_annotation(self):
+        """跳转到当前帧之前的最近标注点"""
+        if self.cap is None:
+            return
+
+        current_frame = self.current_frame
+        annotations = self.parent.annotation_manager.annotations
+        
+        # 按帧位置排序标注
+        sorted_annotations = sorted(annotations, key=lambda x: x["frame"] if x["type"] == "direct_cut" else x["start_frame"])
+        
+        # 寻找当前帧之前的最近标注点
+        prev_frame = None
+        for anno in reversed(sorted_annotations):
+            frame_pos = anno["frame"] if anno["type"] == "direct_cut" else anno["start_frame"]
+            
+            if frame_pos < current_frame:
+                prev_frame = frame_pos
+                break
+        
+        # 如果找到之前的标注点，跳转到该位置
+        if prev_frame is not None:
+            self.seek_to_frame(prev_frame)
+            # 更新状态标签
+            self.parent.status_label.setText(f"已跳转到上一标注点 (帧 {prev_frame})")
+        else:
+            self.parent.status_label.setText("没有找到前面的标注点")
+    
+    def jump_to_next_annotation(self):
+        """跳转到当前帧之后的最近标注点"""
+        if self.cap is None:
+            return
+
+        current_frame = self.current_frame
+        annotations = self.parent.annotation_manager.annotations
+        
+        # 按帧位置排序标注
+        sorted_annotations = sorted(annotations, key=lambda x: x["frame"] if x["type"] == "direct_cut" else x["start_frame"])
+        
+        # 寻找当前帧之后的最近标注点
+        next_frame = None
+        for anno in sorted_annotations:
+            frame_pos = anno["frame"] if anno["type"] == "direct_cut" else anno["start_frame"]
+            
+            if frame_pos > current_frame:
+                next_frame = frame_pos
+                break
+        
+        # 如果找到之后的标注点，跳转到该位置
+        if next_frame is not None:
+            self.seek_to_frame(next_frame)
+            # 更新状态标签
+            self.parent.status_label.setText(f"已跳转到下一标注点 (帧 {next_frame})")
+        else:
+            self.parent.status_label.setText("没有找到后面的标注点") 
