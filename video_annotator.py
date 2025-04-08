@@ -156,6 +156,7 @@ class VideoAnnotator(QMainWindow):
             ("Ctrl+2", "添加渐变过渡"),
             ("Ctrl+左箭头", "跳到上一标注点"),
             ("Ctrl+右箭头", "跳到下一标注点"),
+            ("Ctrl+Q", "切换快速预览模式"),
         ]
         
         for i, (key, desc) in enumerate(shortcuts):
@@ -293,6 +294,12 @@ class VideoAnnotator(QMainWindow):
         self.play_action.setShortcut('Space')
         self.play_action.triggered.connect(self.video_player.toggle_play)
         playback_menu.addAction(self.play_action)
+        
+        # 快速预览模式
+        self.preview_action = QAction('快速预览模式', self)
+        self.preview_action.setShortcut('Ctrl+Q')
+        self.preview_action.triggered.connect(self.video_player.toggle_preview_mode)
+        playback_menu.addAction(self.preview_action)
         
         # 向前跳转
         forward_menu = QMenu('前进', self)
