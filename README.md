@@ -78,8 +78,11 @@ pip install PyQt5 opencv-python numpy
 | Alt+左箭头 | 后退1秒 |
 | Shift+右箭头 | 前进5帧 |
 | Shift+左箭头 | 后退5帧 |
+| Ctrl+右箭头 | 跳转到下一标注点 |
+| Ctrl+左箭头 | 跳转到上一标注点 |
 | Ctrl+1 | 添加直接切换标注 |
 | Ctrl+2 | 添加/完成渐变过渡标注 |
+| Ctrl+Q | 切换快速预览模式 |
 | Delete | 删除选中的标注 |
 | Ctrl+O | 打开视频 |
 | Ctrl+S | 保存标注 |

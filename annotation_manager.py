@@ -63,7 +63,18 @@ class AnnotationManager:
             item_text = f"直接切换于 {current_time} (帧 {current_frame})"
             # self.main_window.annotation_list.addItem(item_text) # Handled by refresh
             self.main_window.status_label.setText(f"已添加: {item_text}")
-        
+
+            self.sort_annotations()
+            try:
+                new_index = self.annotations.index(annotation)
+                self.refresh_annotation_list()
+                new_item = self.main_window.annotation_list.item(new_index)
+                if new_item:
+                    self.main_window.annotation_list.setCurrentItem(new_item)
+            except ValueError:
+                # Should not happen, but refresh anyway
+                self.refresh_annotation_list()
+
         elif template_index == 1:  # 模板2：渐变过渡
             if self.temp_annotation is None:  # 开始标注
                 self.temp_annotation = {
@@ -84,20 +95,28 @@ class AnnotationManager:
                 
                 self.temp_annotation["end_time"] = current_time
                 self.temp_annotation["end_frame"] = current_frame
-                self.annotations.append(self.temp_annotation)
-                
-                # Remove the temporary item from list
-                self.main_window.annotation_list.takeItem(self.main_window.annotation_list.count() - 1)
+                # Store completed annotation before clearing temp
+                completed_annotation = self.temp_annotation.copy()
+                self.annotations.append(completed_annotation)
+                # No need to explicitly remove the temporary item, refresh will handle it
+                # self.main_window.annotation_list.takeItem(self.main_window.annotation_list.count() - 1)
                 item_text = (f"渐变过渡: {self.temp_annotation['start_time']} - {current_time} "
                            f"(帧 {self.temp_annotation['start_frame']} - {current_frame})")
                 # self.main_window.annotation_list.addItem(item_text) # Handled by refresh
                 self.main_window.status_label.setText(f"已添加: {item_text}")
-                
-                self.temp_annotation = None
-        
-        self.sort_annotations()
-        self.refresh_annotation_list()
-        self.main_window.annotation_list.scrollToBottom() # Scroll to the latest item
+                self.temp_annotation = None # Clear temp annotation AFTER adding to list
+
+                self.sort_annotations()
+                try:
+                    # Find the index of the completed annotation
+                    new_index = self.annotations.index(completed_annotation)
+                    self.refresh_annotation_list() # Refresh updates the list view
+                    new_item = self.main_window.annotation_list.item(new_index)
+                    if new_item:
+                        self.main_window.annotation_list.setCurrentItem(new_item) # Select the new item
+                except ValueError:
+                     # Should not happen, but refresh anyway
+                    self.refresh_annotation_list()
 
     def delete_annotation(self):
         """删除选中的标注"""
